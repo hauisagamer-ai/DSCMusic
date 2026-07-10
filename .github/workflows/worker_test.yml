@@ -8,17 +8,17 @@ on:
         required: true
         default: "https://www.youtube.com/watch?v=aBhrEv5Z7uc"
       player_client:
-        description: "player_client"
+        description: "player_client (must be web/tv/mweb for sign-in content — android/ios reject cookies)"
         required: true
         default: "tv"
         type: choice
         options:
           - tv
-          - default
           - web
           - web_music
-          - web_safari
           - mweb
+          - default
+          - web_safari
           - android
           - android_music
           - ios
@@ -58,6 +58,12 @@ jobs:
           echo "--- installed version ---"
           yt-dlp --version
 
+      # Required to bypass 403s on sign-in/cookie-based clients (web, tv,
+      # mweb, web_music). Runs in script mode using the Deno already set
+      # up above — no separate server process needed.
+      - name: Install PO Token provider (bgutil, script mode)
+        run: pip install -U bgutil-ytdlp-pot-provider
+
       - name: Install FFmpeg
         run: |
           sudo apt-get update
@@ -93,6 +99,8 @@ jobs:
             -F "${{ github.event.inputs.song_url }}" \
             $COOKIE_FLAG \
             -v 2>&1 | tee ytdlp_verbose.log
+          echo "--- PO token providers detected ---"
+          grep -i "pot] PO Token Providers" ytdlp_verbose.log || echo "none found"
 
       - name: Extract key diagnostic lines
         if: always()
