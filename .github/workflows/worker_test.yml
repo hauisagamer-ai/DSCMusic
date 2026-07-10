@@ -10,9 +10,11 @@ on:
       player_client:
         description: "player_client"
         required: true
-        default: "web"
+        default: "tv"
         type: choice
         options:
+          - tv
+          - default
           - web
           - web_music
           - web_safari
@@ -21,7 +23,6 @@ on:
           - android_music
           - ios
           - ios_music
-          - tv
           - tv_simply
 
 jobs:
@@ -57,6 +58,11 @@ jobs:
           echo "--- installed version ---"
           yt-dlp --version
 
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Write cookies (optional)
         run: |
           if [ -n "${{ secrets.YTDLP_COOKIES_B64 }}" ]; then
@@ -71,9 +77,13 @@ jobs:
         run: |
           COOKIE_FLAG=""
           [ -f cookies.txt ] && COOKIE_FLAG="--cookies cookies.txt"
+          CLIENT_ARG=""
+          if [ "${{ github.event.inputs.player_client }}" != "default" ]; then
+            CLIENT_ARG="--extractor-args youtube:player_client=${{ github.event.inputs.player_client }}"
+          fi
           yt-dlp \
             --js-runtimes deno \
-            --extractor-args "youtube:player_client=${{ github.event.inputs.player_client }}" \
+            $CLIENT_ARG \
             -F "${{ github.event.inputs.song_url }}" \
             $COOKIE_FLAG \
             -v 2>&1 | tee ytdlp_verbose.log
@@ -86,6 +96,35 @@ jobs:
           echo ""
           echo "=== Available formats ==="
           grep -A100 "Available formats" ytdlp_verbose.log || echo "none found"
+
+      - name: Download song (audio)
+        run: |
+          COOKIE_FLAG=""
+          [ -f cookies.txt ] && COOKIE_FLAG="--cookies cookies.txt"
+          CLIENT_ARG=""
+          if [ "${{ github.event.inputs.player_client }}" != "default" ]; then
+            CLIENT_ARG="--extractor-args youtube:player_client=${{ github.event.inputs.player_client }}"
+          fi
+          yt-dlp \
+            --js-runtimes deno \
+            $CLIENT_ARG \
+            -f "bestaudio/best" \
+            -x --audio-format mp3 \
+            -o "%(title)s.%(ext)s" \
+            "${{ github.event.inputs.song_url }}" \
+            $COOKIE_FLAG \
+            -v 2>&1 | tee ytdlp_download.log
+          echo "--- downloaded file(s) ---"
+          ls -lh *.mp3
+
+      - name: Upload downloaded song
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-song
+          path: |
+            *.mp3
+            ytdlp_download.log
 
       - name: Upload full verbose log
         if: always()
