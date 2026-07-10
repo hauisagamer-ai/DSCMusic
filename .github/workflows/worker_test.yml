@@ -77,10 +77,16 @@ jobs:
         run: |
           COOKIE_FLAG=""
           [ -f cookies.txt ] && COOKIE_FLAG="--cookies cookies.txt"
+          CLIENT="${{ github.event.inputs.player_client }}"
           CLIENT_ARG=""
-          if [ "${{ github.event.inputs.player_client }}" != "default" ]; then
-            CLIENT_ARG="--extractor-args youtube:player_client=${{ github.event.inputs.player_client }}"
+          if [ "$CLIENT" != "default" ]; then
+            CLIENT_ARG="--extractor-args youtube:player_client=$CLIENT"
           fi
+          # android/ios clients reject cookies outright — yt-dlp silently
+          # drops the whole client if cookies are passed alongside them.
+          case "$CLIENT" in
+            android*|ios*) COOKIE_FLAG="" ;;
+          esac
           yt-dlp \
             --js-runtimes deno \
             $CLIENT_ARG \
@@ -101,10 +107,14 @@ jobs:
         run: |
           COOKIE_FLAG=""
           [ -f cookies.txt ] && COOKIE_FLAG="--cookies cookies.txt"
+          CLIENT="${{ github.event.inputs.player_client }}"
           CLIENT_ARG=""
-          if [ "${{ github.event.inputs.player_client }}" != "default" ]; then
-            CLIENT_ARG="--extractor-args youtube:player_client=${{ github.event.inputs.player_client }}"
+          if [ "$CLIENT" != "default" ]; then
+            CLIENT_ARG="--extractor-args youtube:player_client=$CLIENT"
           fi
+          case "$CLIENT" in
+            android*|ios*) COOKIE_FLAG="" ;;
+          esac
           yt-dlp \
             --js-runtimes deno \
             $CLIENT_ARG \
