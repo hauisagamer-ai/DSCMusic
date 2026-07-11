@@ -1,0 +1,49 @@
+name: Music Worker
+
+on:
+  repository_dispatch:
+    types: [extract_song]
+
+jobs:
+  extract:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U "yt-dlp[default]" bgutil-ytdlp-pot-provider requests
+
+      - name: Write YouTube cookies
+        run: |
+          if [ -n "${{ secrets.YTDLP_COOKIES_B64 }}" ]; then
+            echo "${{ secrets.YTDLP_COOKIES_B64 }}" | base64 -d > cookies.txt
+            wc -l cookies.txt
+          else
+            echo "no cookies secret set, skipping"
+          fi
+        continue-on-error: true
+
+      - name: Run extractor
+        env:
+          GUILD_ID: ${{ github.event.client_payload.guild_id }}
+          YOUTUBE_URL: ${{ github.event.client_payload.youtube_url }}
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          CALLBACK_SECRET: ${{ github.event.client_payload.callback_secret }}
+          YTDLP_COOKIES_PATH: cookies.txt
+        run: python worker.py
