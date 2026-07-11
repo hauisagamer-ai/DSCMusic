@@ -460,25 +460,18 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 def run_discord():
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            client.run(BOT_TOKEN)
-            return
-        except discord.errors.HTTPException as e:
-            if e.status == 429:
-                wait = min(60 * (2 ** attempt), 900)
-                log.warning(
-                    "Discord login rate limited (attempt %s/%s), waiting %ss",
-                    attempt + 1, max_retries, wait,
-                )
-                time.sleep(wait)
-                continue
-            raise
-    log.error("Max login retries exceeded, giving up.")
-    raise SystemExit(1)
+    try:
+        client.run(BOT_TOKEN)
+    except discord.errors.HTTPException as e:
+        if e.status == 429:
+            wait = 120
+            log.warning("Discord login rate limited, sleeping %ss before exit", wait)
+            time.sleep(wait)
+            raise SystemExit(1)
+        raise
 
 if __name__ == "__main__":
+    time.sleep(3)
     if not PUBLIC_CALLBACK_URL:
         log.warning("PUBLIC_CALLBACK_URL not set — Worker won't know where to send results!")
     flask_thread = threading.Thread(target=run_flask, daemon=True)
