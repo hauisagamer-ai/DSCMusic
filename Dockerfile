@@ -21,6 +21,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Render injects $PORT at runtime — Flask app must bind to it, not a fixed port
-EXPOSE 8080
+EXPOSE 10000
 
 CMD ["python", "controller.py"]
