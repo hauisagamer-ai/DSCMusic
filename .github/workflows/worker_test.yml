@@ -8,15 +8,15 @@ on:
         required: true
         default: "https://www.youtube.com/watch?v=aBhrEv5Z7uc"
       player_client:
-        description: "player_client (must be web/tv/mweb for sign-in content — android/ios reject cookies)"
+        description: "player_client (used for youtube.com — music.youtube.com always forces web_music)"
         required: true
-        default: "tv"
+        default: "mweb"
         type: choice
         options:
+          - mweb
           - tv
           - web
           - web_music
-          - mweb
           - default
           - web_safari
           - android
@@ -84,6 +84,13 @@ jobs:
           COOKIE_FLAG=""
           [ -f cookies.txt ] && COOKIE_FLAG="--cookies cookies.txt"
           CLIENT="${{ github.event.inputs.player_client }}"
+          URL="${{ github.event.inputs.song_url }}"
+          # music.youtube.com always uses web_music; youtube.com uses the
+          # dropdown-selected client (default mweb).
+          case "$URL" in
+            *music.youtube.com*) CLIENT="web_music" ;;
+          esac
+          echo "Using player_client: $CLIENT"
           CLIENT_ARG=""
           if [ "$CLIENT" != "default" ]; then
             CLIENT_ARG="--extractor-args youtube:player_client=$CLIENT"
@@ -96,7 +103,7 @@ jobs:
           yt-dlp \
             --js-runtimes deno \
             $CLIENT_ARG \
-            -F "${{ github.event.inputs.song_url }}" \
+            -F "$URL" \
             $COOKIE_FLAG \
             -v 2>&1 | tee ytdlp_verbose.log
           echo "--- PO token providers detected ---"
@@ -116,6 +123,11 @@ jobs:
           COOKIE_FLAG=""
           [ -f cookies.txt ] && COOKIE_FLAG="--cookies cookies.txt"
           CLIENT="${{ github.event.inputs.player_client }}"
+          URL="${{ github.event.inputs.song_url }}"
+          case "$URL" in
+            *music.youtube.com*) CLIENT="web_music" ;;
+          esac
+          echo "Using player_client: $CLIENT"
           CLIENT_ARG=""
           if [ "$CLIENT" != "default" ]; then
             CLIENT_ARG="--extractor-args youtube:player_client=$CLIENT"
@@ -129,7 +141,7 @@ jobs:
             -f "bestaudio/best" \
             -x --audio-format mp3 \
             -o "%(title)s.%(ext)s" \
-            "${{ github.event.inputs.song_url }}" \
+            "$URL" \
             $COOKIE_FLAG \
             -v 2>&1 | tee ytdlp_download.log
           echo "--- downloaded file(s) ---"
