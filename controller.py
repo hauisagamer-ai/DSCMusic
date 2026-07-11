@@ -459,10 +459,24 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-
 def run_discord():
-    client.run(BOT_TOKEN)
-
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            client.run(BOT_TOKEN)
+            return
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                wait = min(60 * (2 ** attempt), 900)
+                log.warning(
+                    "Discord login rate limited (attempt %s/%s), waiting %ss",
+                    attempt + 1, max_retries, wait,
+                )
+                time.sleep(wait)
+                continue
+            raise
+    log.error("Max login retries exceeded, giving up.")
+    raise SystemExit(1)
 
 if __name__ == "__main__":
     if not PUBLIC_CALLBACK_URL:
