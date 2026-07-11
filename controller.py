@@ -39,7 +39,7 @@ YOUTUBE_URL_RE = re.compile(
     r"^(https?://)?([\w-]+\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w\-]+"
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("controller")
 
 LOCAL_COOKIES_PATH = "cookies.txt"
@@ -82,27 +82,31 @@ sessions_lock = threading.Lock()
 
 
 def get_session(guild_id):
+    log.debug("get_session(guild_id=%s)", guild_id)
     with sessions_lock:
         return sessions.get(guild_id)
 
 
 def set_session(guild_id, session):
+    log.info("set_session(guild_id=%s) — new session created", guild_id)
     with sessions_lock:
         sessions[guild_id] = session
 
 
 def remove_session(guild_id):
+    log.info("remove_session(guild_id=%s)", guild_id)
     with sessions_lock:
         sessions.pop(guild_id, None)
 
 
 def cancel_task(task):
     if task and not task.done():
+        log.debug("cancel_task(%s)", task)
         task.cancel()
 
 
 async def say(session, msg):
-    log.info("[guild=%s] %s", session.guild_id, msg)
+    log.info("say(guild=%s): %s", session.guild_id, msg)
     channel = client.get_channel(session.text_channel_id)
     if channel:
         try:
@@ -112,11 +116,13 @@ async def say(session, msg):
 
 
 def stop_current_audio(session):
+    log.info("stop_current_audio(guild=%s) state=%s", session.guild_id, session.state)
     if session.voice_client and (session.voice_client.is_playing() or session.voice_client.is_paused()):
         session.voice_client.stop()
 
 
 def dispatch_extraction(guild_id, text_channel_id, youtube_url):
+    log.info("dispatch_extraction(guild=%s, url=%s) CALLED", guild_id, youtube_url)
     url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/dispatches"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
@@ -135,34 +141,40 @@ def dispatch_extraction(guild_id, text_channel_id, youtube_url):
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=10)
     except requests.RequestException as e:
-        log.error("GitHub dispatch failed: %s", e)
+        log.error("dispatch_extraction FAILED (request exception): %s", e)
         return False
     if resp.status_code != 204:
-        log.error("GitHub dispatch failed: %s %s", resp.status_code, resp.text)
+        log.error("dispatch_extraction FAILED: %s %s", resp.status_code, resp.text)
         return False
+    log.info("dispatch_extraction(guild=%s) SUCCESS", guild_id)
     return True
 
 
 def _extract_locally_sync(youtube_url):
+    log.info("_extract_locally_sync(url=%s) CALLED", youtube_url)
     cookies = LOCAL_COOKIES_PATH if os.path.exists(LOCAL_COOKIES_PATH) else None
     info = extract(youtube_url, cookies_path=cookies)
+    log.info("_extract_locally_sync(url=%s) SUCCESS", youtube_url)
     return to_payload(info)
 
 
 async def extract_locally(session, youtube_url):
+    log.info("extract_locally(guild=%s, url=%s) CALLED", session.guild_id, youtube_url)
     await say(session, "Worker unavailable — extracting locally, this may take a moment...")
     loop = asyncio.get_running_loop()
     try:
         payload = await loop.run_in_executor(None, _extract_locally_sync, youtube_url)
     except Exception as e:  # noqa: BLE001
-        log.error("Local fallback extraction failed: %s", e)
+        log.error("extract_locally(guild=%s) FAILED: %s", session.guild_id, e)
         await _handle_extraction_error(session, str(e))
         return
 
     if not payload.get("stream_url"):
+        log.error("extract_locally(guild=%s) FAILED: no stream_url", session.guild_id)
         await _handle_extraction_error(session, "No playable stream found (local fallback).")
         return
 
+    log.info("extract_locally(guild=%s) SUCCESS", session.guild_id)
     await play_stream(
         session,
         payload["title"],
@@ -173,49 +185,59 @@ async def extract_locally(session, youtube_url):
 
 
 async def _idle_timeout(session):
+    log.info("_idle_timeout(guild=%s) STARTED, sleeping %ss", session.guild_id, IDLE_TIMEOUT_SEC)
     try:
         await asyncio.sleep(IDLE_TIMEOUT_SEC)
+        log.info("_idle_timeout(guild=%s) FIRED", session.guild_id)
         await say(session, "Idle for 8 minutes. Disconnecting.")
         await teardown(session)
     except asyncio.CancelledError:
-        pass
+        log.debug("_idle_timeout(guild=%s) CANCELLED", session.guild_id)
 
 
 def start_idle_timer(session):
+    log.info("start_idle_timer(guild=%s)", session.guild_id)
     cancel_task(session.idle_timer)
     session.idle_timer = asyncio.create_task(_idle_timeout(session))
 
 
 async def _load_timeout(session, youtube_url):
+    log.info("_load_timeout(guild=%s) STARTED, sleeping %ss", session.guild_id, LOAD_TIMEOUT_SEC)
     try:
         await asyncio.sleep(LOAD_TIMEOUT_SEC)
+        log.info("_load_timeout(guild=%s) FIRED — no callback received in time", session.guild_id)
         await say(session, "Worker took too long. Falling back to local extraction...")
         await extract_locally(session, youtube_url)
     except asyncio.CancelledError:
-        pass
+        log.debug("_load_timeout(guild=%s) CANCELLED", session.guild_id)
 
 
 def start_load_timer(session, youtube_url):
+    log.info("start_load_timer(guild=%s)", session.guild_id)
     cancel_task(session.load_timer)
     session.load_timer = asyncio.create_task(_load_timeout(session, youtube_url))
 
 
 async def _song_cap_timeout(session):
+    log.info("_song_cap_timeout(guild=%s) STARTED, sleeping %ss", session.guild_id, MAX_SONG_DURATION_SEC)
     try:
         await asyncio.sleep(MAX_SONG_DURATION_SEC)
+        log.info("_song_cap_timeout(guild=%s) FIRED", session.guild_id)
         await say(session, "Song exceeded 15-minute cap. Stopping.")
         session.cap_triggered = True
         stop_current_audio(session)
     except asyncio.CancelledError:
-        pass
+        log.debug("_song_cap_timeout(guild=%s) CANCELLED", session.guild_id)
 
 
 def start_song_cap_timer(session):
+    log.info("start_song_cap_timer(guild=%s)", session.guild_id)
     cancel_task(session.song_cap_timer)
     session.song_cap_timer = asyncio.create_task(_song_cap_timeout(session))
 
 
 async def begin_load(session, youtube_url):
+    log.info("begin_load(guild=%s, url=%s) CALLED — state was %s", session.guild_id, youtube_url, session.state)
     session.state = "LOADING"
     session.current_url = youtube_url
     cancel_task(session.idle_timer)
@@ -226,27 +248,34 @@ async def begin_load(session, youtube_url):
         cancel_task(session.load_timer)
         await say(session, "Dispatch failed — falling back to local extraction...")
         await extract_locally(session, youtube_url)
+    log.info("begin_load(guild=%s) FINISHED (dispatch ok=%s)", session.guild_id, ok)
 
 
 async def play_stream(session, title, stream_url, http_headers, duration):
+    log.info("play_stream(guild=%s, title=%s) CALLED", session.guild_id, title)
     cancel_task(session.load_timer)
 
     if duration and duration > MAX_SONG_DURATION_SEC:
+        log.info("play_stream(guild=%s) REJECTED — duration %ss exceeds cap", session.guild_id, duration)
         await say(session, f"Rejected: video is {duration // 60} min, exceeds 15-min cap.")
         session.state = "IDLE"
         start_idle_timer(session)
         return
 
     if not session.voice_client or not session.voice_client.is_connected():
+        log.info("play_stream(guild=%s) — voice not connected, connecting now", session.guild_id)
         guild = client.get_guild(session.guild_id)
         vc_channel = guild.get_channel(session.voice_channel_id) if guild else None
         if not vc_channel:
+            log.error("play_stream(guild=%s) — voice channel not found", session.guild_id)
             await say(session, "Voice channel no longer available.")
             await teardown(session)
             return
         try:
             session.voice_client = await vc_channel.connect()
+            log.info("play_stream(guild=%s) — voice connected", session.guild_id)
         except Exception as e:  # noqa: BLE001
+            log.error("play_stream(guild=%s) — voice connect failed: %s", session.guild_id, e)
             await say(session, f"Failed to join voice: {e}")
             await teardown(session)
             return
@@ -259,6 +288,7 @@ async def play_stream(session, title, stream_url, http_headers, duration):
     source = discord.FFmpegPCMAudio(stream_url, before_options=before_opts, options="-vn")
 
     def after_playback(error):
+        log.info("play_stream(guild=%s) after_playback callback fired, error=%s", session.guild_id, error)
         if error:
             log.error("Playback error: %s", error)
         if discord_loop:
@@ -267,17 +297,22 @@ async def play_stream(session, title, stream_url, http_headers, duration):
     session.voice_client.play(source, after=after_playback)
     session.state = "PLAYING"
     start_song_cap_timer(session)
+    log.info("play_stream(guild=%s) — now PLAYING", session.guild_id)
     await say(session, f"Now playing: {title}")
 
 
 async def on_song_finished(session):
+    log.info("on_song_finished(guild=%s) CALLED — switching_song=%s cap_triggered=%s loop=%s",
+              session.guild_id, session.switching_song, session.cap_triggered, session.loop_enabled)
     cancel_task(session.song_cap_timer)
 
     if session.switching_song:
         session.switching_song = False
+        log.info("on_song_finished(guild=%s) — was switching, no idle transition", session.guild_id)
         return
 
     if session.state == "SHUTDOWN":
+        log.info("on_song_finished(guild=%s) — already SHUTDOWN, ignoring", session.guild_id)
         return
 
     if session.cap_triggered:
@@ -288,7 +323,9 @@ async def on_song_finished(session):
         return
 
     if session.loop_enabled and session.current_url:
-        await begin_load(session, session.current_url)
+        loop_url = session.current_url
+        log.info("on_song_finished(guild=%s) — looping url=%s", session.guild_id, loop_url)
+        await begin_load(session, loop_url)
         return
 
     session.state = "IDLE"
@@ -297,6 +334,7 @@ async def on_song_finished(session):
 
 
 async def teardown(session):
+    log.info("teardown(guild=%s) CALLED — state was %s", session.guild_id, session.state)
     session.state = "SHUTDOWN"
     cancel_task(session.idle_timer)
     cancel_task(session.load_timer)
@@ -304,10 +342,12 @@ async def teardown(session):
     stop_current_audio(session)
     if session.voice_client and session.voice_client.is_connected():
         await session.voice_client.disconnect(force=True)
+        log.info("teardown(guild=%s) — voice disconnected", session.guild_id)
     remove_session(session.guild_id)
 
 
 async def _handle_extraction_error(session, message):
+    log.info("_handle_extraction_error(guild=%s): %s", session.guild_id, message)
     await say(session, f"Could not load that link: {message}")
     cancel_task(session.load_timer)
     session.state = "IDLE"
@@ -318,11 +358,15 @@ async def _handle_extraction_error(session, message):
 async def on_ready():
     global discord_loop
     discord_loop = asyncio.get_running_loop()
-    log.info("Controller logged in as %s", client.user)
+    log.info("on_ready() CALLED — logged in as %s (session id may indicate reconnect)", client.user)
 
 
 @client.event
 async def on_message(message):
+    log.info(
+        "on_message() CALLED — author=%s bot=%s content=%r channel=%s",
+        message.author, message.author.bot, message.content, message.channel.id,
+    )
     if message.author.bot or not message.guild:
         return
     if not message.content.startswith(COMMAND_PREFIX):
@@ -331,6 +375,7 @@ async def on_message(message):
     arg = message.content[len(COMMAND_PREFIX):].strip()
     guild_id = message.guild.id
     session = get_session(guild_id)
+    log.info("on_message() — parsed arg=%r guild=%s existing_session=%s", arg, guild_id, bool(session))
 
     if arg == "pause":
         if session and session.state == "PLAYING" and session.voice_client and session.voice_client.is_playing():
@@ -371,7 +416,9 @@ async def on_message(message):
         return
 
     if YOUTUBE_URL_RE.match(arg):
+        log.info("on_message() — matched YouTube URL, guild=%s session_state=%s", guild_id, session.state if session else None)
         if session and session.state in ("PLAYING", "IDLE") and session.voice_client:
+            log.info("on_message() — SWITCHING SONG path, guild=%s", guild_id)
             session.switching_song = True
             stop_current_audio(session)
             await begin_load(session, arg)
@@ -383,6 +430,7 @@ async def on_message(message):
             await message.channel.send("Join a voice channel first.")
             return
 
+        log.info("on_message() — NEW SESSION path, guild=%s", guild_id)
         new_session = Session(
             guild_id=guild_id,
             text_channel_id=message.channel.id,
@@ -410,24 +458,30 @@ def root():
 @app.route("/worker/callback", methods=["POST"])
 def worker_callback():
     data = request.get_json(force=True, silent=True) or {}
+    log.info("worker_callback() CALLED — guild=%s status=%s", data.get("guild_id"), data.get("status"))
 
     if data.get("secret") != CALLBACK_SECRET:
+        log.warning("worker_callback() — UNAUTHORIZED (bad secret)")
         return jsonify(error="unauthorized"), 401
 
     try:
         guild_id = int(data["guild_id"])
     except (KeyError, ValueError):
+        log.warning("worker_callback() — invalid guild_id: %r", data.get("guild_id"))
         return jsonify(error="invalid guild_id"), 400
 
     session = get_session(guild_id)
     if not session:
+        log.warning("worker_callback() — no active session for guild=%s", guild_id)
         return jsonify(error="no active session"), 404
 
     if session.state != "LOADING":
+        log.info("worker_callback() — IGNORED, session state is %s not LOADING (guild=%s)", session.state, guild_id)
         return jsonify(status="ignored, session not loading"), 200
 
     if data.get("status") == "error":
         message = data.get("message", "extraction failed")
+        log.info("worker_callback() — Worker reported error: %s (guild=%s)", message, guild_id)
         if discord_loop:
             asyncio.run_coroutine_threadsafe(_worker_reported_error(session, message), discord_loop)
         return jsonify(status="received"), 200
@@ -438,8 +492,10 @@ def worker_callback():
     duration = data.get("duration", 0)
 
     if not stream_url:
+        log.warning("worker_callback() — missing stream_url (guild=%s)", guild_id)
         return jsonify(error="missing stream_url"), 400
 
+    log.info("worker_callback() — SUCCESS, dispatching play_stream (guild=%s title=%s)", guild_id, title)
     if discord_loop:
         asyncio.run_coroutine_threadsafe(
             play_stream(session, title, stream_url, http_headers, duration), discord_loop
@@ -448,6 +504,7 @@ def worker_callback():
 
 
 async def _worker_reported_error(session, message):
+    log.info("_worker_reported_error(guild=%s): %s", session.guild_id, message)
     await say(session, f"Worker extraction failed ({message}). Falling back to local extraction...")
     if session.current_url:
         await extract_locally(session, session.current_url)
@@ -457,21 +514,17 @@ async def _worker_reported_error(session, message):
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
+    log.info("run_flask() starting on port %s", port)
     app.run(host="0.0.0.0", port=port)
 
+
 def run_discord():
-    try:
-        client.run(BOT_TOKEN)
-    except discord.errors.HTTPException as e:
-        if e.status == 429:
-            wait = 120
-            log.warning("Discord login rate limited, sleeping %ss before exit", wait)
-            time.sleep(wait)
-            raise SystemExit(1)
-        raise
+    log.info("run_discord() starting client.run()")
+    client.run(BOT_TOKEN)
+
 
 if __name__ == "__main__":
-    time.sleep(3)
+    log.info("Controller process starting (pid=%s)", os.getpid())
     if not PUBLIC_CALLBACK_URL:
         log.warning("PUBLIC_CALLBACK_URL not set — Worker won't know where to send results!")
     flask_thread = threading.Thread(target=run_flask, daemon=True)
