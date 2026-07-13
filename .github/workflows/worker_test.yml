@@ -24,6 +24,7 @@ on:
           - ios
           - ios_music
           - tv_simply
+          - android_vr
 
 jobs:
   debug:
